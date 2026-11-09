@@ -1,6 +1,8 @@
 import re
+import html
 import sqlite3
 from urllib.parse import urlsplit, urlunsplit
+from sentence_transformers import SentenceTransformer, util
 
 
 def merge_articles(newsdata, gnews, google_news):
@@ -41,20 +43,54 @@ def remove_duplicates(articles):
 
 
 def rank_articles(articles, user_query):
-    query_words = set(re.findall(r"\w+", user_query.lower()))
+    model = SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+    query_embedding = model.encode(
+        user_query,
+        convert_to_tensor=True
+    )
 
     for article in articles:
-        title = article.get("title", "").lower()
-        description = article.get("description", "").lower()
+        title = article.get("title") or ""
+        description = article.get("description") or ""
 
-        title_words = set(re.findall(r"\w+", title))
-        description_words = set(re.findall(r"\w+", description))
-
-        score = (
-            len(query_words & title_words) * 3
-            + len(query_words & description_words)
+        title = html.unescape(
+            re.sub(r"<[^>]+>", " ", title)
         )
-        article["relevance_score"] = score
+
+        description = html.unescape(
+            re.sub(r"<[^>]+>", " ", description)
+        )
+
+        title_embedding = model.encode(
+            title,
+            convert_to_tensor=True
+        )
+
+        title_score = util.cos_sim(
+            query_embedding,
+            title_embedding
+        ).item()
+
+        if description.strip():
+            description_embedding = model.encode(
+                description,
+                convert_to_tensor=True
+            )
+
+            description_score = util.cos_sim(
+                query_embedding,
+                description_embedding
+            ).item()
+        else:
+            description_score = title_score
+
+        article["relevance_score"] = round(
+            0.8 * title_score + 0.2 * description_score,
+            4
+        )
 
     return sorted(
         articles,
